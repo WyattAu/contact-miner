@@ -1,0 +1,26 @@
+[package]
+name = "contact-miner"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-engine web contact discovery: emails, phones, WhatsApp/Telegram/Signal handles from public pages"
+license = "MIT"
+repository = "https://github.com/WyattAu/contact-miner"
+keywords = ["scraper", "contact-discovery", "search", "lead-generation", "osint"]
+categories = ["web-programming", "command-line-utilities"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+dashmap = "6"
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+url = "2"
+
+[profile.release]
+lto = true

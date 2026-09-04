@@ -1,0 +1,4 @@
+/target
+leads.db
+*.db
+__pycache__/
