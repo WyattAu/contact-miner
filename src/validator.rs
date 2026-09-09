@@ -37,16 +37,15 @@ pub fn default_blacklist() -> Vec<String> {
     ]
 }
 
-
-
+// Justified: fixed, compile-time-known regex literals.
+#[allow(clippy::expect_used)]
 static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"#)
-        .expect("Invalid email regex")
+    Regex::new(r#"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"#).expect("Invalid email regex")
 });
 
+#[allow(clippy::expect_used)]
 static EMAIL_REGEX_ANCHORED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"#)
-        .expect("Invalid email regex")
+    Regex::new(r#"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"#).expect("Invalid email regex")
 });
 
 #[derive(Debug, Clone)]
@@ -75,7 +74,9 @@ impl EmailValidator {
         // Extract domain
         if let Some((local, domain)) = email.split_once('@') {
             // Filter URL-encoded prefix artifacts
-            if local.starts_with("u003") { return false; }
+            if local.starts_with("u003") {
+                return false;
+            }
             // Anti-bot/telemetry vendor emails embed themselves in challenge
             // pages scraped from everywhere (wixpress = Wix forms, sentry/techaro
             // = Anubis challenges). Never valid creators.
@@ -85,10 +86,16 @@ impl EmailValidator {
             }
             // JS bundle / source-file junk ("getButtonText@desktop.ts")
             for ext in [".ts", ".tsx", ".js", ".mjs", ".map", ".json", ".css"] {
-                if dl.ends_with(ext) { return false; }
+                if dl.ends_with(ext) {
+                    return false;
+                }
             }
             // Check blacklist
-            if self.blacklist.iter().any(|d| domain.eq_ignore_ascii_case(d)) {
+            if self
+                .blacklist
+                .iter()
+                .any(|d| domain.eq_ignore_ascii_case(d))
+            {
                 return false;
             }
 
@@ -99,11 +106,20 @@ impl EmailValidator {
             }
 
             // Filter out university/corporate emails
-            let tld = domain.split('.').last().unwrap_or("");
-            if tld == "edu" || tld == "gov" || tld == "mil" { return false; }
-            if domain.contains("edu.") || domain.contains(".edu") || domain.contains("university")
-                || domain.contains("college") || domain.contains("onmicrosoft")
-                || domain.ends_with(".ac.uk") || domain.ends_with(".gov.uk") { return false; }
+            let tld = domain.split('.').next_back().unwrap_or("");
+            if tld == "edu" || tld == "gov" || tld == "mil" {
+                return false;
+            }
+            if domain.contains("edu.")
+                || domain.contains(".edu")
+                || domain.contains("university")
+                || domain.contains("college")
+                || domain.contains("onmicrosoft")
+                || domain.ends_with(".ac.uk")
+                || domain.ends_with(".gov.uk")
+            {
+                return false;
+            }
         }
 
         true

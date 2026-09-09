@@ -1,10 +1,10 @@
+use crate::error::{MinerError, Result};
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use tracing::{warn, info};
-use crate::error::{MinerError, Result};
+use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
 pub struct HttpClient {
@@ -58,17 +58,27 @@ impl HttpClient {
         // Prefer healthy engines; if all are cooling down, round-robin anyway
         // (better to retry than stall discovery entirely).
         let now = Instant::now();
+        // Justified: a poisoned mutex here means an engine-panic mid-update;
+        // proceeding with stale health data is preferable to propagating it.
+        #[allow(clippy::unwrap_used)]
         let health = self.engine_health.lock().unwrap();
-        let healthy: Vec<&str> = ENGINES.iter().copied()
+        let healthy: Vec<&str> = ENGINES
+            .iter()
+            .copied()
             .filter(|e| {
-                health.get(*e)
+                health
+                    .get(*e)
                     .and_then(|s| s.disabled_until)
-                    .map_or(true, |until| now >= until)
+                    .is_none_or(|until| now >= until)
             })
             .collect();
         drop(health);
 
-        let pool: &[&str] = if healthy.is_empty() { ENGINES } else { &healthy };
+        let pool: &[&str] = if healthy.is_empty() {
+            ENGINES
+        } else {
+            &healthy
+        };
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -78,6 +88,8 @@ impl HttpClient {
     }
 
     fn record_engine_result(&self, engine: &str, ok: bool) {
+        // Justified: same poisoning rationale as `next_engine`.
+        #[allow(clippy::unwrap_used)]
         let mut health = self.engine_health.lock().unwrap();
         let state = health.entry(engine.to_string()).or_default();
         if ok {
@@ -92,7 +104,9 @@ impl HttpClient {
                 state.disabled_until = Some(Instant::now() + ENGINE_COOLDOWN);
                 warn!(
                     "Engine {} failed {}x, cooling down for {}m",
-                    engine, state.consecutive_fails, ENGINE_COOLDOWN.as_secs() / 60
+                    engine,
+                    state.consecutive_fails,
+                    ENGINE_COOLDOWN.as_secs() / 60
                 );
             }
         }
@@ -122,17 +136,27 @@ impl HttpClient {
                     cmd.arg("--search-proxy").arg("direct").arg("").arg(p);
                 }
                 cmd.output()
-            })
-        ).await
+            }),
+        )
+        .await
         .map_err(|_| MinerError::Http("timeout".to_string()))?
         .map_err(|e| MinerError::Http(e.to_string()))?
         .map_err(|e| MinerError::Http(e.to_string()))?;
 
         let elapsed = start.elapsed();
         if output.status.success() {
-            Ok(Response { status: 200, text: String::from_utf8_lossy(&output.stdout).to_string(), elapsed, url: url_str, engine: "direct".to_string() })
+            Ok(Response {
+                status: 200,
+                text: String::from_utf8_lossy(&output.stdout).to_string(),
+                elapsed,
+                url: url_str,
+                engine: "direct".to_string(),
+            })
         } else {
-            Err(MinerError::Http(format!("Python: {}", String::from_utf8_lossy(&output.stderr))))
+            Err(MinerError::Http(format!(
+                "Python: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )))
         }
     }
 
@@ -148,22 +172,39 @@ impl HttpClient {
             Duration::from_secs(60),
             tokio::task::spawn_blocking(move || {
                 let mut cmd = Command::new("python3");
-                cmd.arg(&fetch_path).arg("--search").arg(&engine_clone).arg(&query_clone);
+                cmd.arg(&fetch_path)
+                    .arg("--search")
+                    .arg(&engine_clone)
+                    .arg(&query_clone);
                 if let Some(ref p) = proxy {
-                    cmd.arg("--search-proxy").arg(&engine_clone).arg(&query_clone).arg(p);
+                    cmd.arg("--search-proxy")
+                        .arg(&engine_clone)
+                        .arg(&query_clone)
+                        .arg(p);
                 }
                 cmd.output()
-            })
-        ).await
+            }),
+        )
+        .await
         .map_err(|_| MinerError::Http("timeout".to_string()))?
         .map_err(|e| MinerError::Http(e.to_string()))?
         .map_err(|e| MinerError::Http(e.to_string()))?;
 
         let elapsed = start.elapsed();
         if output.status.success() {
-            Ok(Response { status: 200, text: String::from_utf8_lossy(&output.stdout).to_string(), elapsed, url: url_display, engine: engine.to_string() })
+            Ok(Response {
+                status: 200,
+                text: String::from_utf8_lossy(&output.stdout).to_string(),
+                elapsed,
+                url: url_display,
+                engine: engine.to_string(),
+            })
         } else {
-            Err(MinerError::Http(format!("Python [{}]: {}", engine, String::from_utf8_lossy(&output.stderr))))
+            Err(MinerError::Http(format!(
+                "Python [{}]: {}",
+                engine,
+                String::from_utf8_lossy(&output.stderr)
+            )))
         }
     }
 
@@ -180,7 +221,12 @@ impl HttpClient {
                 Err(e) => {
                     self.record_engine_result(&engine, false);
                     if attempt < 2 {
-                        warn!("Engine {} failed (attempt {}/3): {}, trying next...", engine, attempt + 1, e);
+                        warn!(
+                            "Engine {} failed (attempt {}/3): {}, trying next...",
+                            engine,
+                            attempt + 1,
+                            e
+                        );
                         // Small delay before trying next engine
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         last_err = e;
@@ -200,15 +246,24 @@ impl HttpClient {
         let output = tokio::time::timeout(
             Duration::from_secs(15),
             tokio::task::spawn_blocking(move || {
-                Command::new("python3").arg(&fetch_path).arg("--verify-email").arg(&email_clone).output()
-            })
-        ).await.map_err(|_| MinerError::Http("timeout".to_string()))?
-          .map_err(|e| MinerError::Http(e.to_string()))?
-          .map_err(|e| MinerError::Http(e.to_string()))?;
+                Command::new("python3")
+                    .arg(&fetch_path)
+                    .arg("--verify-email")
+                    .arg(&email_clone)
+                    .output()
+            }),
+        )
+        .await
+        .map_err(|_| MinerError::Http("timeout".to_string()))?
+        .map_err(|e| MinerError::Http(e.to_string()))?
+        .map_err(|e| MinerError::Http(e.to_string()))?;
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout).to_string();
             if let Ok(result) = serde_json::from_str::<serde_json::Value>(&text) {
-                return Ok(result.get("has_mx").and_then(|v| v.as_bool()).unwrap_or(false));
+                return Ok(result
+                    .get("has_mx")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false));
             }
         }
         Ok(false)
@@ -224,10 +279,17 @@ impl HttpClient {
             return p;
         }
         let exe_path = std::env::current_exe().unwrap_or_default();
-        let fetch_py = exe_path.parent().map(|p| p.join("fetch.py")).unwrap_or_else(|| std::path::PathBuf::from("fetch.py"));
-        if fetch_py.exists() { return fetch_py.to_string_lossy().to_string(); }
+        let fetch_py = exe_path
+            .parent()
+            .map(|p| p.join("fetch.py"))
+            .unwrap_or_else(|| std::path::PathBuf::from("fetch.py"));
+        if fetch_py.exists() {
+            return fetch_py.to_string_lossy().to_string();
+        }
         let local = std::path::PathBuf::from("fetch.py");
-        if local.exists() { return local.to_string_lossy().to_string(); }
+        if local.exists() {
+            return local.to_string_lossy().to_string();
+        }
         "fetch.py".to_string()
     }
 }

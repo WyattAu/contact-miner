@@ -62,12 +62,10 @@ async fn main() {
         Commands::Discover { query, pages } => discover(&store, &cli.proxy, &query, pages).await,
         Commands::DeepCrawl { url } => deep_crawl(&store, &url).await,
         Commands::Verify { email } => verify(&email).await,
-        Commands::Export => {
-            match store.export_json() {
-                Ok(json) => println!("{json}"),
-                Err(e) => eprintln!("export error: {e}"),
-            }
-        }
+        Commands::Export => match store.export_json() {
+            Ok(json) => println!("{json}"),
+            Err(e) => eprintln!("export error: {e}"),
+        },
         Commands::Stats => match store.count() {
             Ok(n) => println!("{n} leads"),
             Err(e) => eprintln!("stats error: {e}"),
@@ -75,6 +73,8 @@ async fn main() {
     }
 }
 
+// CLI binary: fail fast at startup on construction errors.
+#[allow(clippy::expect_used)]
 async fn discover(store: &LeadStore, proxy: &Option<String>, query: &str, pages: i64) {
     let proxies: Vec<String> = proxy.clone().into_iter().collect();
     let pool = Arc::new(ProxyPool::new(&proxies));
@@ -88,7 +88,10 @@ async fn discover(store: &LeadStore, proxy: &Option<String>, query: &str, pages:
         let q = if page == 0 {
             query.to_string()
         } else {
-            format!("{query} -site: pinterest.com -site:facebook.com&first={}", page * 10)
+            format!(
+                "{query} -site: pinterest.com -site:facebook.com&first={}",
+                page * 10
+            )
         };
         match http.search_next(&q).await {
             Ok(resp) => {
@@ -97,13 +100,20 @@ async fn discover(store: &LeadStore, proxy: &Option<String>, query: &str, pages:
                 for r in &results {
                     // Emails straight from the results page
                     for email in parser.extract_emails(&r.snippet) {
-                        if !validator.validate(&email) { continue; }
-                        if !verifier.verify(&email).await { continue; }
+                        if !validator.validate(&email) {
+                            continue;
+                        }
+                        if !verifier.verify(&email).await {
+                            continue;
+                        }
                         let _ = store.upsert(&Lead {
                             email: email.clone(),
                             name: Some(r.title.clone()),
                             website: Some(r.url.clone()),
-                            phone: None, whatsapp: None, telegram: None, signal: None,
+                            phone: None,
+                            whatsapp: None,
+                            telegram: None,
+                            signal: None,
                             source: Some(query.to_string()),
                         });
                         found += 1;
@@ -111,7 +121,8 @@ async fn discover(store: &LeadStore, proxy: &Option<String>, query: &str, pages:
                     }
                     // Deep-crawl profile pages (they carry the channels)
                     if r.url.contains("linktr.ee/") || r.url.contains("beacons.ai/") {
-                        harvest_deep(&http, store, &parser, &validator, &verifier, &r.url, query).await;
+                        harvest_deep(&http, store, &parser, &validator, &verifier, &r.url, query)
+                            .await;
                     }
                 }
             }
@@ -122,6 +133,8 @@ async fn discover(store: &LeadStore, proxy: &Option<String>, query: &str, pages:
     println!("done: {found} new contact events (dedup in store)");
 }
 
+// CLI binary: fail fast at startup on construction errors.
+#[allow(clippy::expect_used)]
 async fn deep_crawl(store: &LeadStore, url: &str) {
     let http = Arc::new(HttpClient::new(Arc::new(ProxyPool::new(&[])), 60).expect("http client"));
     let parser = HtmlParser::new();
@@ -131,9 +144,9 @@ async fn deep_crawl(store: &LeadStore, url: &str) {
 }
 
 async fn harvest_deep(
-    http: &Arc<HttpClient>,
+    _http: &Arc<HttpClient>,
     store: &LeadStore,
-    parser: &HtmlParser,
+    _parser: &HtmlParser,
     validator: &EmailValidator,
     verifier: &EmailVerifier,
     url: &str,
@@ -156,20 +169,37 @@ async fn harvest_deep(
     .await;
 
     let Ok(Ok(Ok(o))) = output else { return };
-    if !o.status.success() { return; }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&o.stdout)) else { return; };
+    if !o.status.success() {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&o.stdout))
+    else {
+        return;
+    };
 
     let arr = |k: &str| -> Vec<String> {
-        v.get(k).and_then(|x| x.as_array())
-            .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+        v.get(k)
+            .and_then(|x| x.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let first = |k: &str| arr(k).first().cloned();
-    let follower = v.get("follower_count").and_then(|f| f.as_i64()).map(|f| f.to_string());
+    let follower = v
+        .get("follower_count")
+        .and_then(|f| f.as_i64())
+        .map(|f| f.to_string());
 
     for email in arr("emails") {
-        if !validator.validate(&email) { continue; }
-        if !verifier.verify(&email).await { continue; }
+        if !validator.validate(&email) {
+            continue;
+        }
+        if !verifier.verify(&email).await {
+            continue;
+        }
         let _ = store.upsert(&Lead {
             email: email.clone(),
             name: None,
@@ -180,7 +210,10 @@ async fn harvest_deep(
             signal: first("signal"),
             source: Some(format!("{source} (deep)")),
         });
-        let extra = follower.clone().map(|f| format!(" followers={f}")).unwrap_or_default();
+        let extra = follower
+            .clone()
+            .map(|f| format!(" followers={f}"))
+            .unwrap_or_default();
         println!("  + {email}{extra}");
     }
 }

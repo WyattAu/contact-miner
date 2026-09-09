@@ -113,22 +113,14 @@ impl ProxyPool {
             .unwrap_or(0.0);
 
         let total = successes + failures;
-        let health = if total > 0.0 {
-            successes / total
-        } else {
-            1.0
-        };
+        let health = if total > 0.0 { successes / total } else { 1.0 };
 
         self.health_scores.insert(proxy.to_string(), health);
     }
 
     pub fn get_stats(&self) -> PoolStats {
         let total = self.proxies.len();
-        let healthy = self
-            .quarantined
-            .iter()
-            .filter(|q| !*q.value())
-            .count();
+        let healthy = self.quarantined.iter().filter(|q| !*q.value()).count();
         let quarantined = total - healthy;
 
         PoolStats {

@@ -38,12 +38,16 @@ impl LeadStore {
             CREATE INDEX IF NOT EXISTS idx_leads_source ON leads(source);
             "#,
         )?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Insert or enrich. Never overwrites existing channel data —
     /// COALESCE keeps the first non-null value for each field.
     pub fn upsert(&self, lead: &Lead) -> Result<(), rusqlite::Error> {
+        // Justified: poisoning means a prior SQLite-panic; store is single-owner.
+        #[allow(clippy::unwrap_used)]
         let conn = self.conn.lock().unwrap();
         conn.execute(
             r#"INSERT INTO leads (email, name, website, phone, whatsapp, telegram, signal, source)
@@ -58,19 +62,29 @@ impl LeadStore {
                 source = COALESCE(excluded.source, source),
                 last_seen = CURRENT_TIMESTAMP"#,
             rusqlite::params![
-                lead.email, lead.name, lead.website, lead.phone,
-                lead.whatsapp, lead.telegram, lead.signal, lead.source,
+                lead.email,
+                lead.name,
+                lead.website,
+                lead.phone,
+                lead.whatsapp,
+                lead.telegram,
+                lead.signal,
+                lead.source,
             ],
         )?;
         Ok(())
     }
 
     pub fn count(&self) -> Result<i64, rusqlite::Error> {
+        // Justified: poisoning means a prior SQLite-panic; store is single-owner.
+        #[allow(clippy::unwrap_used)]
         let conn = self.conn.lock().unwrap();
         conn.query_row("SELECT COUNT(*) FROM leads", [], |r| r.get(0))
     }
 
     pub fn export_json(&self) -> Result<String, rusqlite::Error> {
+        // Justified: poisoning means a prior SQLite-panic; store is single-owner.
+        #[allow(clippy::unwrap_used)]
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT email, name, website, phone, whatsapp, telegram, signal, source FROM leads",
