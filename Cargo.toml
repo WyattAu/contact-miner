@@ -7,6 +7,7 @@ license = "MIT"
 repository = "https://github.com/WyattAu/contact-miner"
 keywords = ["scraper", "contact-discovery", "search", "lead-generation", "osint"]
 categories = ["web-programming", "command-line-utilities"]
+exclude = ["/target"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -24,3 +25,7 @@ url = "2"
 
 [profile.release]
 lto = true
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
