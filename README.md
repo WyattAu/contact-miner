@@ -1,5 +1,9 @@
 # contact-miner
 
+[![docs.rs](https://docs.rs/contact-miner/badge.svg)](https://docs.rs/contact-miner)
+[![crates.io](https://img.shields.io/crates/v/contact-miner.svg)](https://crates.io/crates/contact-miner)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+
 Multi-engine web contact discovery in Rust. Finds **emails, phone numbers,
 and WhatsApp / Telegram / Signal handles** on public web pages — via rotating
 search engines and deep-crawling profile pages (Linktree, Beacons).
