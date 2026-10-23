@@ -1,11 +1,11 @@
-# Threat Model — contact-miner
+# Threat Model: contact-miner
 
 Reference: STRIDE. Scope: the crate's public API surface. Trust boundary:
 (1) bytes/inputs entering public constructors and parsers, (2) concurrent
-callers sharing interior state. contact-miner is an in-process library — it opens
+callers sharing interior state. contact-miner is an in-process library: it opens
 no sockets and inherits the embedding process's trust domain.
 
-Purpose: Contact extraction (`contact-miner`) — parses emails/phones/links from documents with verification heuristics
+Purpose: Contact extraction (`contact-miner`): parses emails/phones/links from documents with verification heuristics
 
 ## Assets
 

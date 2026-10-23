@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 
 Multi-engine web contact discovery in Rust. Finds **emails, phone numbers,
-and WhatsApp / Telegram / Signal handles** on public web pages — via rotating
+and WhatsApp / Telegram / Signal handles** on public web pages: via rotating
 search engines and deep-crawling profile pages (Linktree, Beacons).
 
 ```
@@ -23,17 +23,17 @@ numbers, Signal links. contact-miner extracts all of them, plus the emails.
 
 ## Features
 
-- **Engine rotation with backoff** — Brave, Bing, Yandex out of the box;
+- **Engine rotation with backoff**: Brave, Bing, Yandex out of the box;
   engines that fail repeatedly are skipped for 30 minutes instead of hammered
-- **Deep-crawl channel extraction** — profile pages expose contact channels
+- **Deep-crawl channel extraction**: profile pages expose contact channels
   in raw HTML and embedded JSON; both are parsed
-- **Obfuscated email handling** — `name [at] domain [dot] com` forms decoded
-- **Anti-artifact rejection** — anti-bot challenge pages (Anubis et al. embed
+- **Obfuscated email handling**: `name [at] domain [dot] com` forms decoded
+- **Anti-artifact rejection**: anti-bot challenge pages (Anubis et al. embed
   vendor emails everywhere), JS bundle filenames (`icon@chunk.ts`), platform
   support inboxes, and asset URLs are filtered
-- **Phone sanity checks** — UNIX timestamps and digit-junk rejected
-- **MX verification** with caching — dead domains never enter your store
-- **Non-destructive SQLite store** — new finds enrich existing records,
+- **Phone sanity checks**: UNIX timestamps and digit-junk rejected
+- **MX verification** with caching: dead domains never enter your store
+- **Non-destructive SQLite store**: new finds enrich existing records,
   never overwrite known-good contact data
 
 ## Install
@@ -100,7 +100,7 @@ query ──► engine rotation (Brave/Bing/Yandex, backoff on failure)
 ## Adding engines
 
 `src/http.rs` holds the engine list; `fetch.py` maps names to search URLs.
-Any engine that returns parseable HTML results works — add the URL template
+Any engine that returns parseable HTML results works: add the URL template
 to `ENGINE_URLS`, the name to `ENGINES`, done.
 
 ## Notes on responsible use
@@ -108,7 +108,7 @@ to `ENGINE_URLS`, the name to `ENGINES`, done.
 - This tool reads **public** pages. Respect robots.txt, site terms, and
   applicable law (GDPR/CCPA apply to how you *use* contact data, everywhere).
 - Search engines rate-limit automated queries. The backoff and pacing exist
-  for a reason — don't remove them.
+  for a reason: don't remove them.
 - Contact people the way you'd want to be contacted.
 
 ## License

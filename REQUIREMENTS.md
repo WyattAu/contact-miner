@@ -1,9 +1,9 @@
-# Requirements — contact-miner
+# Requirements: contact-miner
 
 Numbered, testable requirements. Every requirement maps to at least one named
 test or doc-comment contract; security-relevant items cite threat-model rows.
 
-Scope: Contact extraction (`contact-miner`) — parses emails/phones/links from documents with verification heuristics
+Scope: Contact extraction (`contact-miner`): parses emails/phones/links from documents with verification heuristics
 
 ## Functional
 
@@ -18,7 +18,7 @@ Scope: Contact extraction (`contact-miner`) — parses emails/phones/links from 
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | REQ-CM-100 | Parser bounds all captures (no unbounded allocation from hostile documents) | MUST |
-| REQ-CM-101 | Regex is linear-time (no catastrophic backtracking) — `regex` crate | MUST |
+| REQ-CM-101 | Regex is linear-time (no catastrophic backtracking): `regex` crate | MUST |
 
 ## Observability & API hygiene
 
