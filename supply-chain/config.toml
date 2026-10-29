@@ -325,10 +325,6 @@ version = "0.8.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio]]
-version = "1.53.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.tokio]]
 version = "1.54.1"
 criteria = "safe-to-deploy"
 
@@ -382,10 +378,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.yoke]]
 version = "0.8.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.yoke-derive]]
-version = "0.8.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.yoke-derive]]
