@@ -11,6 +11,9 @@ categories = ["web-programming", "command-line-utilities"]
 exclude = ["/target"]
 
 [dependencies]
+# Iteration 54 backport: single-source the proven contact gates + CF decode
+# + gmail-alias canonicalization from outreachkit (iters 40/45/46).
+outreachkit = { path = "../outreachkit" }
 tokio = { version = "1", features = ["full"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }

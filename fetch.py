@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Multi-engine HTTP fetcher v6 — with UA rotation, jitter, SMTP verification, deep-crawl, and proxy support.
+"""Multi-engine HTTP fetcher v7 — TLS-fingerprint-consistent fetches.
+
 Usage: python3 fetch.py <url>
        python3 fetch.py --search <engine> <query>
        python3 fetch.py --verify-email <email>
@@ -8,7 +9,17 @@ Usage: python3 fetch.py <url>
        python3 fetch.py --search-proxy <engine> <query> <proxy>
 Exit codes: 0=success, 1=error, 2=rate limited
 """
-import sys, urllib.request, gzip, time, json, os, hashlib, random
+import sys, urllib.request, urllib.error, gzip, time, json, os, hashlib, random
+
+# TLS-fingerprint realism (Spec 06, iter 45): urllib's Python JA3/JA4
+# handshake under a Chrome/Firefox UA string is the classic bot-detector
+# mismatch — Cloudflare/Anubis weigh transport fingerprints >> header
+# text (startpage's Anubis wall killed that engine; see ENGINE_URLS).
+# curl_cffi (curl-impersonate) replays a REAL Chrome handshake + matching
+# header set, so transport and claimed client agree. The random desktop
+# UA rotation is deliberately NOT combined with it: a Firefox UA on a
+# Chrome fingerprint is the same mismatch in the other direction.
+from curl_cffi import requests as impersonate_requests
 
 CACHE_DIR = "/tmp/scraper_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -16,9 +27,11 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 ENGINE_URLS = {
     'brave': 'https://search.brave.com/search?q={q}',
     'bing': 'https://www.bing.com/search?q={q}',
-    'yandex': 'https://yandex.com/search/?text={q}',
-    # Dead (Sep 2026): startpage serves Anubis challenges, swisscows is a JS
-    # shell with no HTML results, ecosia rate-limits, qwant API 403s,
+    # Removed (peptide iter 33 verdict, backported iter 54): yandex's
+    # bot-wall returns HTTP 200 with zero results = FALSE SUCCESS that
+    # burns a rotation attempt. Dead engines must fail LOUDLY.
+    # Also dead (Sep 2026): startpage serves Anubis challenges, swisscows is
+    # a JS shell with no HTML results, ecosia rate-limits, qwant API 403s,
     # searx/mojeek instances return no results. Kept for reference.
     # 'ecosia': 'https://www.ecosia.org/search?q={q}&method=index',
     # 'startpage': 'https://www.startpage.com/sp/search?query={q}',
@@ -54,61 +67,106 @@ def fetch(url, ua=None, use_cache=True, proxy=None, max_retries=3):
                 sys.stdout.buffer.write(f.read())
             return
 
-    if ua is None:
-        ua = random.choice(USER_AGENTS)
-    req = urllib.request.Request(url, headers={
-        'User-Agent': ua,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': random.choice([
-            'en-US,en;q=0.5',
-            'en-GB,en;q=0.5',
-            'en-US,en;q=0.9',
-        ]),
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-    })
+    proxies = {"http": proxy, "https": proxy} if proxy else None
 
-    # Set up proxy if provided
-    proxy_handler = None
-    if proxy:
-        proxy_handler = urllib.request.ProxyHandler({
-            'http': proxy,
-            'https': proxy,
+    # Explicit ua = DECLARED identity (honest bot, e.g. reddit lane): plain
+    # client, no impersonation. Default: Chrome-impersonated fetch.
+    if ua is not None:
+        req = urllib.request.Request(url, headers={
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate',
         })
-
-    opener = urllib.request.build_opener(proxy_handler) if proxy_handler else urllib.request.build_opener()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({
+            'http': proxy, 'https': proxy})) if proxy else urllib.request.build_opener()
+        resp = opener.open(req, timeout=15)
+        data = resp.read()
+        try:
+            data = gzip.decompress(data)
+        except Exception:
+            pass
+        with open(cache_file, 'wb') as f:
+            f.write(data)
+        sys.stdout.buffer.write(data)
+        return
 
     for attempt in range(max_retries):
         try:
-            resp = opener.open(req, timeout=15)
-            data = resp.read()
-            try:
-                data = gzip.decompress(data)
-            except:
-                pass
+            resp = impersonate_requests.get(
+                url, impersonate="chrome", timeout=15,
+                proxies=proxies, allow_redirects=True,
+            )
+            if resp.status_code == 429:
+                time.sleep(min(60, 10 * (attempt + 1)))
+                continue
+            if resp.status_code in (500, 502, 503, 504):
+                time.sleep(2 * (attempt + 1))
+                continue
+            if resp.status_code >= 400:
+                raise RuntimeError(f"HTTP {resp.status_code} for {url}")
+            data = resp.content
             # Cache the result
             with open(cache_file, 'wb') as f:
                 f.write(data)
             sys.stdout.buffer.write(data)
             return
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                wait_time = min(60, 10 * (attempt + 1))
-                time.sleep(wait_time)
-                continue
-            elif e.code in (500, 502, 503, 504):
-                time.sleep(2 * (attempt + 1))
-                continue
-            else:
-                raise
-        except Exception as e:
+        except RuntimeError:
+            raise
+        except Exception:
             if attempt < max_retries - 1:
                 time.sleep(2 * (attempt + 1))
                 continue
-            else:
-                raise
+            raise
 
     sys.exit(2)
+
+def proxied_fetch(url):
+    """Fetch a URL through the free-proxy lane:
+    1. PROXY_WORKER_URL (Cloudflare Worker forward-proxy) if set — preferred,
+       clean egress IPs, 100k req/day free.
+    2. api.allorigins.win — zero-setup public CORS proxy fallback.
+    Prints the raw HTML either way (same contract as fetch())."""
+    worker = os.environ.get("PROXY_WORKER_URL", "").strip()
+    if worker:
+        # Worker->engine hops are intermittently flaky (Cloudflare 522 on
+        # Bing/Startpage): retry with backoff before giving up.
+        target = worker + urllib.request.quote(url, safe="")
+        last_err = None
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(target, headers={
+                    'User-Agent': random.choice(USER_AGENTS),
+                    'Accept': 'text/html',
+                })
+                resp = urllib.request.urlopen(req, timeout=30)
+                raw = resp.read()
+                try:
+                    raw = gzip.decompress(raw)
+                except Exception:
+                    pass
+                sys.stdout.write(raw.decode('utf-8', errors='ignore'))
+                return
+            except urllib.error.HTTPError as e:
+                last_err = e
+                if e.code in (429, 500, 502, 503, 504, 522, 523, 524):
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                last_err = e
+                time.sleep(2 * (attempt + 1))
+        raise last_err
+    # allorigins: JSON envelope {"contents": "<html>"}
+    target = "https://api.allorigins.win/get?url=" + urllib.request.quote(url, safe="")
+    req = urllib.request.Request(target, headers={
+        'User-Agent': random.choice(USER_AGENTS),
+    })
+    resp = urllib.request.urlopen(req, timeout=35)
+    data = json.loads(resp.read().decode('utf-8', errors='ignore'))
+    contents = data.get("contents", "")
+    if contents:
+        sys.stdout.write(contents)
+
 
 def search_engine(engine, query, proxy=None):
     random_jitter()

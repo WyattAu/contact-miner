@@ -87,6 +87,117 @@ impl HtmlParser {
         Ok(results)
     }
 
+    /// Raw organic results for NON-platform verticals (iteration 54):
+    /// `parse_search_results` normalizes to creator-platform profile URLs
+    /// and discards everything else — correct for the creator lane, wrong
+    /// for property/vertical discovery where the result IS a company site.
+    /// Bing wraps organic links in `/ck/a?...&u=a1<base64url>` redirects —
+    /// those are decoded to their targets. Returns external http(s) URLs,
+    /// engine-internal + asset URLs stripped, deduped, queries stripped.
+    pub fn parse_raw_results(&self, html: &str) -> Vec<SearchResult> {
+        let mut results = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // Bing redirect targets first (the real organic URLs).
+        if let Ok(re) = Regex::new(r#"[?&]u=a1([A-Za-z0-9_-]{20,})"#) {
+            for cap in re.captures_iter(html) {
+                if let Some(b64) = cap.get(1).map(|m| m.as_str()) {
+                    if let Some(url) = decode_base64url(b64) {
+                        if let Some(r) = self.raw_result_for(&url, html) {
+                            if seen.insert(r.url.clone()) {
+                                results.push(r);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bing serves organic URLs to non-JS clients as <cite> display
+        // forms ("https://site.co.uk <span>› path › more</span>") —
+        // reconstruct https://site.co.uk/path from them.
+        if let Ok(re) = Regex::new(r"<cite>(.*?)</cite>") {
+            for cap in re.captures_iter(html) {
+                let raw = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                let text = strip_html_tags(raw);
+                let text = text.split('›').next().unwrap_or("").trim();
+                let mut parts = vec![text.to_string()];
+                if let Some(rest) = cap.get(1).map(|m| m.as_str()) {
+                    for seg in rest.split('›').skip(1) {
+                        let seg = strip_html_tags(seg).trim().to_string();
+                        if !seg.is_empty() && seg != "..." {
+                            parts.push(seg);
+                        }
+                    }
+                }
+                if parts[0].is_empty() {
+                    continue;
+                }
+                let url = if parts[0].starts_with("http") {
+                    parts.join("/")
+                } else {
+                    format!("https://{}", parts.join("/"))
+                };
+                if let Some(r) = self.raw_result_for(&url, html) {
+                    if seen.insert(r.url.clone()) {
+                        results.push(r);
+                    }
+                }
+            }
+        }
+
+        // Direct hrefs (brave/other engines expose real targets).
+        for cap in self.url_regex.find_iter(html) {
+            let url = cap
+                .as_str()
+                .trim_start_matches("href=\"")
+                .trim_end_matches('"')
+                .to_string();
+            if !url.starts_with("http") || url.contains("/ck/a") {
+                continue;
+            }
+            if let Some(r) = self.raw_result_for(&url, html) {
+                if seen.insert(r.url.clone()) {
+                    results.push(r);
+                }
+            }
+        }
+        debug!("Parsed {} unique raw results", results.len());
+        results
+    }
+
+    fn raw_result_for(&self, url: &str, html: &str) -> Option<SearchResult> {
+        let lower = url.to_lowercase();
+        let internal = [
+            "bing.com", "microsoft", "msn.com", "brave.com", "google.com",
+            "yandex", "ecosia.org", "startpage", "swisscows", "qwant",
+            "mojeek", "w3.org", "schema.org",
+        ];
+        if internal.iter().any(|i| lower.contains(i)) {
+            return None;
+        }
+        if url.ends_with(".css")
+            || url.ends_with(".js")
+            || url.ends_with(".png")
+            || url.ends_with(".jpg")
+            || url.ends_with(".svg")
+            || url.ends_with(".ico")
+        {
+            return None;
+        }
+        let clean = url.split('?').next().unwrap_or(url).to_string();
+        if clean.len() < 12 || !clean.starts_with("http") {
+            return None;
+        }
+        let title = extract_nearby_title(html, url);
+        let snippet = extract_nearby_snippet(html, url);
+        Some(SearchResult {
+            title,
+            url: clean,
+            snippet,
+        })
+    }
+
     fn normalize_to_profile_url(&self, url: &str) -> String {
         if url.contains("instagram.com/") {
             if let Some(username) = extract_ig_username(url) {
@@ -126,9 +237,15 @@ impl HtmlParser {
     pub fn extract_emails(&self, text: &str) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();
 
-        // Standard form (also catches mailto: links, since we scan raw text)
+        // Iteration 54 backport (outreachkit iter 40): Cloudflare Scrape
+        // Shield payloads decode in place before the standard scan.
+        let revealed = outreachkit::gates::reveal_cfemail(text);
+        let text = revealed.as_str();
+
+        // Standard form. Canonicalize BEFORE dedup: gmail alias forms must
+        // collapse here, not after the found-check (iter 46).
         for m in self.email_regex.find_iter(text) {
-            let e = m.as_str().to_string();
+            let e = canonicalize_email(m.as_str());
             if is_valid_email(&e) && !found.contains(&e) {
                 found.push(e);
             }
@@ -140,12 +257,12 @@ impl HtmlParser {
                 r"(?i)([a-zA-Z0-9._%+-]+)\s*[\[\(]?\s*at\s*[\]\)]?\s*([a-zA-Z0-9.-]+)\s*[\[\(]?\s*dot\s*[\]\)]?\s*([a-zA-Z]{2,})",
             ) {
                 for cap in re.captures_iter(text) {
-                    let candidate = format!(
+                    let candidate = canonicalize_email(&format!(
                         "{}@{}.{}",
                         cap.get(1).map(|m| m.as_str()).unwrap_or(""),
                         cap.get(2).map(|m| m.as_str()).unwrap_or(""),
                         cap.get(3).map(|m| m.as_str()).unwrap_or("")
-                    );
+                    ));
                     if is_valid_email(&candidate) && !found.contains(&candidate) {
                         found.push(candidate);
                     }
@@ -153,7 +270,7 @@ impl HtmlParser {
             }
         }
 
-        found.into_iter().map(|e| canonicalize_email(&e)).collect()
+        found
     }
 
     pub fn extract_phones(&self, text: &str) -> Vec<String> {
@@ -507,14 +624,10 @@ fn is_valid_email(email: &str) -> bool {
     true
 }
 
-/// Canonicalize email address (lowercase, trim, normalize).
+/// Canonicalize email address — SINGLE implementation lives in outreachkit
+/// (iteration 54 backport: gmail-family aliasing, Spec 07 I6).
 pub fn canonicalize_email(email: &str) -> String {
-    let email = email.trim().to_lowercase();
-    let email = email.replace(" ", "");
-    let email = email.replace("...", ".");
-    let email = email.replace("..", ".");
-    let email = email.trim_matches('.').to_string();
-    email
+    outreachkit::gates::canonicalize_email(email)
 }
 
 fn extract_ig_username(url: &str) -> Option<String> {
@@ -528,6 +641,37 @@ fn extract_ig_username(url: &str) -> Option<String> {
         }
     }
     None
+}
+
+
+/// Base64url decode (standard alphabet, no padding) — for Bing's
+/// `/ck/a?...&u=a1<base64url>` organic-link redirects. Hand-rolled to keep
+/// the dependency tree lean.
+fn decode_base64url(input: &str) -> Option<String> {
+    fn val(b: u8) -> Option<u32> {
+        match b {
+            b'A'..=b'Z' => Some((b - b'A') as u32),
+            b'a'..=b'z' => Some((b - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((b - b'0' + 52) as u32),
+            b'-' => Some(62),
+            b'_' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3 + 3);
+    let mut buf: u32 = 0;
+    let mut bits = 0u32;
+    for &b in bytes {
+        let v = val(b)?;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 #[cfg(test)]
@@ -555,5 +699,68 @@ mod tests {
             extract_ig_username("https://www.instagram.com/reel/ABC/"),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod iter54_backport_tests {
+    use super::*;
+
+    #[test]
+    fn cfemail_decode_fixed_vector() {
+        // outreachkit iter 40 vector: key 0x37, "hello@jeffnippard.com".
+        let href = r#"<a href="/cdn-cgi/l/email-protection#375f525b5b58775d525151595e47475645531954585a">x</a>"#;
+        let parser = HtmlParser::new();
+        assert!(parser.extract_emails(href).contains(&"hello@jeffnippard.com".to_string()));
+    }
+
+    #[test]
+    fn gmail_aliases_collapse() {
+        let parser = HtmlParser::new();
+        let got = parser.extract_emails("mail john@gmail.com or j.o.hn+shop@gmail.com");
+        assert_eq!(got, vec!["john@gmail.com".to_string()]);
+        assert_eq!(canonicalize_email("a.b+x@googlemail.com"), "ab@gmail.com");
+        assert_eq!(canonicalize_email("a.b+x@yahoo.com"), "a.b+x@yahoo.com");
+    }
+}
+
+#[cfg(test)]
+mod raw_results_tests {
+    use super::*;
+
+    #[test]
+    fn bing_redirect_targets_are_unwrapped() {
+        // "https://www.unitestudents.com/glasgow" base64url-encoded
+        let html = r#"<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&u=a1aHR0cHM6Ly93d3cudW5pdGVzdHVkZW50cy5jb20vZ2xhc2dvdw"></a></h2></li>"#;
+        let parser = HtmlParser::new();
+        let raw = parser.parse_raw_results(html);
+        assert!(
+            raw.iter().any(|r| r.url.contains("unitestudents.com/glasgow")),
+            "redirect target must surface: {raw:?}"
+        );
+    }
+
+    #[test]
+    fn bing_cites_reconstruct_organic_urls() {
+        let html = r#"<li class="b_algo"><cite>https://pbsanews.co.uk <span class="b_ctdif">› category › pbsa</span></cite></li>
+        <li class="b_algo"><cite>https://www.knightfrank.co.uk <span class="b_ctdif">› research › article</span></cite></li>"#;
+        let parser = HtmlParser::new();
+        let raw = parser.parse_raw_results(html);
+        let urls: Vec<&str> = raw.iter().map(|r| r.url.as_str()).collect();
+        assert!(urls.contains(&"https://pbsanews.co.uk/category/pbsa"), "{urls:?}");
+        assert!(urls.contains(&"https://www.knightfrank.co.uk/research/article"), "{urls:?}");
+    }
+
+    #[test]
+    fn raw_results_keep_company_sites() {
+        let html = r#"<li class="b_algo"><h2><a href="https://www.unitestudents.com/glasgow">Unite Students Glasgow</a></h2><p>Student accommodation in Glasgow.</p></li>
+        <li class="b_algo"><h2><a href="https://www.studentroost.co.uk/contact?utm=x">Contact</a></h2><p>Get in touch.</p></li>
+        <li><a href="https://www.bing.com/search?q=x">next</a></li>"#;
+        let parser = HtmlParser::new();
+        let raw = parser.parse_raw_results(html);
+        let urls: Vec<&str> = raw.iter().map(|r| r.url.as_str()).collect();
+        assert!(urls.contains(&"https://www.unitestudents.com/glasgow"), "{urls:?}");
+        assert!(urls.contains(&"https://www.studentroost.co.uk/contact"), "{urls:?}");
+        assert!(!urls.iter().any(|u| u.contains("bing.com")));
     }
 }

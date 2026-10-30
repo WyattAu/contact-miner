@@ -34,8 +34,11 @@ pub struct Response {
 // Engine status (Sep 2026): startpage serves Anubis bot-challenges,
 // swisscows returns a JS shell with no HTML results, ecosia rate-limits,
 // qwant API 403s, searx/mojeek return no results.
-// brave/bing/yandex return parseable HTML results.
-const ENGINES: &[&str] = &["brave", "bing", "yandex"];
+// brave/bing return parseable HTML results. Yandex REMOVED (peptide iter
+// 33 verdict, backported iter 54): its bot-wall returns HTTP 200 with zero
+// results — a false success that burns rotation attempts. Dead engines
+// must fail loudly, not lie.
+const ENGINES: &[&str] = &["brave", "bing"];
 /// After this many consecutive failures an engine cools down...
 const ENGINE_FAIL_THRESHOLD: u32 = 3;
 /// ...for this long, so rate-limited engines recover instead of being hammered.
