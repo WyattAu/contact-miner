@@ -2,3 +2,4 @@
 leads.db
 *.db
 __pycache__/
+.cargo/
